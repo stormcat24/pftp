@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lestrrat/go-server-starter/listener"
+	proxyproto "github.com/pires/go-proxyproto"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
@@ -20,6 +21,7 @@ type middleware map[string]middlewareFunc
 // FtpServer struct type
 type FtpServer struct {
 	listener      net.Listener
+	proxyListener *proxyproto.Listener
 	clientCounter uint64
 	config        *config
 	serverTLSData *tlsData
@@ -77,6 +79,11 @@ func (server *FtpServer) listen() (err error) {
 			return err
 		}
 		server.listener = l
+		proxyListener := proxyproto.Listener{
+			Listener: l,
+		}
+
+		server.proxyListener = &proxyListener
 	}
 
 	logrus.Info("Listening address ", server.listener.Addr())
@@ -167,7 +174,11 @@ L:
 
 func (server *FtpServer) stop() error {
 	server.shutdown = true
-	if server.listener != nil {
+	if server.proxyListener != nil {
+		if err := server.proxyListener.Close(); err != nil {
+			return err
+		}
+	} else if server.listener != nil {
 		if err := server.listener.Close(); err != nil {
 			return err
 		}
