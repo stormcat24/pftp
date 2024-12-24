@@ -1,6 +1,7 @@
 package pftp
 
 import (
+	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -9,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lestrrat/go-server-starter/listener"
 	proxyproto "github.com/pires/go-proxyproto"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
@@ -20,7 +20,7 @@ type middleware map[string]middlewareFunc
 
 // FtpServer struct type
 type FtpServer struct {
-	listener      net.Listener
+	// listener      net.Listener
 	proxyListener *proxyproto.Listener
 	clientCounter uint64
 	config        *config
@@ -67,26 +67,19 @@ func (server *FtpServer) Use(command string, m middlewareFunc) {
 }
 
 func (server *FtpServer) listen() (err error) {
-	if os.Getenv("SERVER_STARTER_PORT") != "" {
-		listeners, err := listener.ListenAll()
-		if listeners == nil || err != nil {
-			return err
-		}
-		server.listener = listeners[0]
-	} else {
-		l, err := net.Listen("tcp", server.config.ListenAddr)
-		if err != nil {
-			return err
-		}
-		server.listener = l
-		proxyListener := proxyproto.Listener{
-			Listener: l,
-		}
 
-		server.proxyListener = &proxyListener
+	l, err := net.Listen("tcp", server.config.ListenAddr)
+	if err != nil {
+		return err
 	}
+	proxyListener := proxyproto.Listener{
+		Listener: l,
+	}
+	logrus.Info("use proxy protocol v2")
 
-	logrus.Info("Listening address ", server.listener.Addr())
+	server.proxyListener = &proxyListener
+
+	logrus.Info("Listening address ", server.proxyListener.Addr())
 
 	return err
 }
@@ -96,7 +89,7 @@ func (server *FtpServer) serve() error {
 	eg := errgroup.Group{}
 
 	for {
-		netConn, err := server.listener.Accept()
+		netConn, err := server.proxyListener.Accept()
 		if err != nil {
 			// if use server starter, break for while all childs end
 			if os.Getenv("SERVER_STARTER_PORT") != "" {
@@ -104,7 +97,7 @@ func (server *FtpServer) serve() error {
 				break
 			}
 
-			if server.listener != nil {
+			if server.proxyListener != nil {
 				return err
 			}
 		}
@@ -114,6 +107,9 @@ func (server *FtpServer) serve() error {
 		conn.SetKeepAlive(true)
 		conn.SetKeepAlivePeriod(time.Duration(server.config.KeepaliveTime) * time.Second)
 		conn.SetLinger(0)
+
+		log.Printf("proxyprotocol v2 accept remote address: %s\n", netConn.RemoteAddr().String())
+		log.Printf("proxyprotocol v2 accept local address: %s\n", netConn.LocalAddr().String())
 
 		if server.config.IdleTimeout > 0 {
 			conn.SetDeadline(time.Now().Add(time.Duration(server.config.IdleTimeout) * time.Second))
@@ -176,10 +172,6 @@ func (server *FtpServer) stop() error {
 	server.shutdown = true
 	if server.proxyListener != nil {
 		if err := server.proxyListener.Close(); err != nil {
-			return err
-		}
-	} else if server.listener != nil {
-		if err := server.listener.Close(); err != nil {
 			return err
 		}
 	}
